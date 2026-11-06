@@ -1,0 +1,33 @@
+name: setup-trivy
+description: Install a pinned Trivy release (checksum-verified) and cache its vulnerability DB
+inputs:
+  version:
+    description: Trivy version tag, e.g. v0.76.0
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install Trivy ${{ inputs.version }}
+      shell: bash
+      env:
+        V: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        ver="${V#v}"
+        base="https://github.com/aquasecurity/trivy/releases/download/${V}"
+        cd "$(mktemp -d)"
+        curl -sSfLO "${base}/trivy_${ver}_Linux-64bit.tar.gz"
+        curl -sSfLO "${base}/trivy_${ver}_checksums.txt"
+        grep " trivy_${ver}_Linux-64bit.tar.gz$" "trivy_${ver}_checksums.txt" | sha256sum -c -
+        tar xzf "trivy_${ver}_Linux-64bit.tar.gz" trivy
+        sudo install -m 0755 trivy /usr/local/bin/trivy
+        trivy --version
+    - name: Date key for DB cache
+      id: date
+      shell: bash
+      run: echo "d=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v6
+      with:
+        path: ~/.cache/trivy
+        key: trivy-db-${{ steps.date.outputs.d }}
+        restore-keys: trivy-db-

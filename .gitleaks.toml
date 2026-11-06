@@ -1,0 +1,8 @@
+# gitleaks: default rules + documented false positives only (review in PR)
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "jwtRS256.key is the FILE NAME of the mounted JWT key, not key material"
+regexTarget = "match"
+regexes = ['''jwtRS256\.key''']

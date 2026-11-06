@@ -1,0 +1,11 @@
+.env
+*.pem
+*.key
+kubeconfig
+.kube/
+.aws/
+rendered/
+target/
+__pycache__/
+.venv/
+*.tgz
