@@ -1,8 +1,0 @@
-# Replace each @handle with the real GitHub username.
-*                          @SA_HANDLE @DO1_HANDLE @DO2_HANDLE @SRE_HANDLE
-/.github/                  @DO2_HANDLE
-/security/.trivyignore     @DO2_HANDLE @SA_HANDLE
-/scripts/                  @DO2_HANDLE
-/deploy/helm/              @DO1_HANDLE
-/ops/                      @SRE_HANDLE
-/src/                      @DO2_HANDLE

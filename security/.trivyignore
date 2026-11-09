@@ -1,13 +1,8 @@
-# Trivy exceptions register (APP-05). JUSTIFIED EXCEPTIONS ONLY.
+# Trivy exceptions. JUSTIFIED EXCEPTIONS ONLY: fixing the finding always comes first.
 # Format: one ID per line, with an expiry:   <ID> exp:YYYY-MM-DD
 # Every entry needs a comment above it: why, who accepted it, Jira ticket.
 # After the expiry date the entry stops working and the gate fails again.
-# CODEOWNERS: changes to this file need a DevSecOps (DO2) approval.
-
-# demo-data-config holds the PUBLIC upstream demo password ('bankofanthos') for
-# synthetic users only - not a real credential. Accepted: DO2, SCRUM-<n>.
-KSV-0109 exp:2027-01-31
-
+#
 # Example for a CVE with no fix yet:
-# Not reachable because <reason>. Accepted: DO2, SCRUM-<n>.
+# Not reachable because <reason>. Accepted: <name>, SCRUM-<n>.
 # CVE-YYYY-NNNNN exp:2026-12-31
