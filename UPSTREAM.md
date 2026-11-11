@@ -34,4 +34,4 @@ Each change is made in its own reviewed PR and listed here.
 
 | Change | Files | Reason |
 |---|---|---|
-| _(none yet)_ | | |
+| Removed the `src/ledgermonolith` module from the root Maven project | `pom.xml` | `ledgermonolith` wasn't imported (we don't deploy it), and Maven refuses to build a project with a missing module |
