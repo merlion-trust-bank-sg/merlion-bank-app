@@ -14,7 +14,8 @@
 
 # Use the official Python docker container, slim version, running Debian
 FROM python:3.14.10-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS base
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+# uv pinned by version and digest, so the build tool can't change between builds
+COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 /uv /bin/uv
 
 FROM base AS builder
 

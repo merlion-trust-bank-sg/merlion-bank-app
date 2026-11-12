@@ -38,12 +38,16 @@ which is still in ECR.
 
 1. Open the failed job. It lists the package, the installed version and the fixed version.
 2. **Fix first**: bump the dependency or base image and push to the same branch.
-3. If there is no fix yet, add an entry to `security/.trivyignore` with a comment (reason, who
-   accepted it, Jira ticket) and an `exp:YYYY-MM-DD` expiry. After the expiry the gate fails again.
+3. If there is **no fix, or the fix needs a major upgrade of upstream code** (e.g. a new major
+   framework version), add an entry to `security/.trivyignore` with a comment: why it isn't reachable
+   in our deployment, who proposed it, who accepted it (a reviewer other than the proposer: the PR
+   approval), the Jira ticket, and an `exp:YYYY-MM-DD` expiry. After the expiry the gate fails again.
 4. Never add `--exit-code 0`, `continue-on-error` or `|| true` to a scanner.
 
 The gates fail on CRITICAL findings **that have a fix** (`--ignore-unfixed`). HIGH findings are
-reported in the job output and by ECR's scan on push, but don't block: the application is unmodified
+reported in the job output and by ECR's scan on push (per image: ECR console, or
+`aws ecr describe-image-scan-findings --repository-name merlion/<image> --image-id imageTag=<sha>`),
+but don't block: the application is unmodified
 upstream code, so the gate is set to stop the most severe, fixable issues without turning every
 upstream HIGH into a blocked release. A finding without a fix can't be acted on in a PR, so it doesn't
 block either.
