@@ -124,6 +124,10 @@ jobs:
     needs: summary
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The App's private key is a secret of this Environment, which only main may use (Settings ->
+    # Environments -> promotion -> Deployment branches: main). A workflow on any other branch can't
+    # read it. Rotation: README "Promotion GitHub App".
+    environment: promotion
     concurrency:
       group: promote-staging # one promotion at a time; a newer one waits, then supersedes
       cancel-in-progress: false
