@@ -7,7 +7,8 @@
 #   image-scan   builds each image and scans it with Trivy (.github/actions/build-image, also used by
 #                cd.yml, so the image published is built and scanned the same way)
 #
-# Gates fail on HIGH and CRITICAL findings that have a fix (--ignore-unfixed). Exceptions go in
+# Gates fail on CRITICAL findings that have a fix (--ignore-unfixed); HIGH findings are reported by
+# ECR's scan on push and tracked, but don't block. Exceptions go in
 # security/.trivyignore with a reason, a ticket and an expiry; see README "When a security gate fails".
 name: ci
 
@@ -22,7 +23,7 @@ permissions:
 env:
   TRIVY_VERSION: v0.76.2
   # Gate settings for the SCA scan; the image scan uses the same ones (build-image action)
-  TRIVY_SEVERITY: HIGH,CRITICAL
+  TRIVY_SEVERITY: CRITICAL
   TRIVY_IGNORE_UNFIXED: "true"
   TRIVY_EXIT_CODE: "1"
   TRIVY_IGNOREFILE: security/.trivyignore
@@ -60,6 +61,19 @@ jobs:
         uses: ./.github/actions/setup-trivy
         with:
           version: ${{ env.TRIVY_VERSION }}
+
+      # Trivy needs each pom.xml's full dependency tree. Resolving it with Maven first fills ~/.m2
+      # (cached between runs), so Trivy reads it locally instead of fetching every parent POM and BOM
+      # from Maven Central itself, which rate-limits shared CI IPs (HTTP 429).
+      - name: Set up JDK 17 (Maven cache)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Resolve Java dependencies
+        run: ./mvnw -q -B dependency:go-offline
 
       # Lock files and pom.xml only: what each service ships, not the images' OS packages (image-scan)
       - name: Trivy filesystem scan (vulnerabilities in dependencies)

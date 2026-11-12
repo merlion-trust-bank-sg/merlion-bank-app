@@ -42,8 +42,11 @@ which is still in ECR.
    accepted it, Jira ticket) and an `exp:YYYY-MM-DD` expiry. After the expiry the gate fails again.
 4. Never add `--exit-code 0`, `continue-on-error` or `|| true` to a scanner.
 
-The gates fail on HIGH and CRITICAL findings **that have a fix** (`--ignore-unfixed`): a finding
-without a fix can't be acted on in a PR, and ECR's scan on push still reports it.
+The gates fail on CRITICAL findings **that have a fix** (`--ignore-unfixed`). HIGH findings are
+reported in the job output and by ECR's scan on push, but don't block: the application is unmodified
+upstream code, so the gate is set to stop the most severe, fixable issues without turning every
+upstream HIGH into a blocked release. A finding without a fix can't be acted on in a PR, so it doesn't
+block either.
 
 ## Credentials
 

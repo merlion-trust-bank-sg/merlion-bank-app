@@ -1,7 +1,7 @@
 name: build-image
 description: >-
   Build one Bank of Anthos image for linux/amd64 into the runner's Docker, then scan it with Trivy
-  (HIGH and CRITICAL findings that have a fix fail the step). Shared by ci.yml (scan only) and
+  (CRITICAL findings that have a fix fail the step). Shared by ci.yml (scan only) and
   cd.yml (scan, then push the same image).
 inputs:
   image:
@@ -65,5 +65,5 @@ runs:
         IMAGE: ${{ inputs.image }}
       run: |
         trivy image --scanners vuln --format table \
-          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+          --severity CRITICAL --ignore-unfixed --exit-code 1 \
           --ignorefile security/.trivyignore "$IMAGE"

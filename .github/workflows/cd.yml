@@ -1,7 +1,7 @@
 # Publish the 9 Bank of Anthos images to ECR, on merge to main and by hand.
 #
 # Each image is built, then scanned with Trivy (the same gate as ci.yml), and only pushed if the scan
-# passes: an image with a HIGH or CRITICAL finding that has a fix never reaches ECR, even if it got
+# passes: an image with a CRITICAL finding that has a fix never reaches ECR, even if it got
 # onto main. Pushed as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA; the digests go
 # to the run summary for merlion-bank-infra deploy/values-<env>.yaml.
 #

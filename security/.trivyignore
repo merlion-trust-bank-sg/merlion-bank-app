@@ -6,3 +6,12 @@
 # Example for a CVE with no fix yet:
 # Not reachable because <reason>. Accepted: <name>, SCRUM-<n>.
 # CVE-YYYY-NNNNN exp:2026-12-31
+
+# CVE-2026-47884 (CRITICAL): spring-webmvc 6.2.19, in ledgerwriter, balancereader, transactionhistory.
+# SSRF/RCE in Spring MVC's XsltView, only when an app renders views through XsltView with a catch-all
+# mapping and no explicit view name. Not reachable here: all three services are @RestController JSON
+# APIs with explicit mappings; none uses XsltView, a ViewResolver or any server-side view (checked
+# with grep over src/ledger). The only fix is Spring 7 (Spring Boot 4), a major upgrade of unmodified
+# upstream code. Revisit when upstream Bank of Anthos moves to Spring Boot 4, or at the expiry.
+# Accepted: yqyeoh, SCRUM-37.
+CVE-2026-47884 exp:2026-12-31
