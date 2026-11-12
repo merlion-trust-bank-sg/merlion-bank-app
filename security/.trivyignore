@@ -15,3 +15,18 @@
 # upstream code. Revisit when upstream Bank of Anthos moves to Spring Boot 4, or at the expiry.
 # Accepted: yqyeoh, SCRUM-37.
 CVE-2026-47884 exp:2026-12-31
+
+# CVE-2025-68121 (CRITICAL): Go stdlib crypto/tls certificate validation, in /usr/local/bin/gosu inside
+# the accounts-db and ledger-db images (postgres:16.15-alpine's gosu 1.19 is built with Go 1.24.6).
+# Not reachable here: these images only run our DB init Job, whose command (bash -c, then psql) replaces
+# the image's entrypoint, so gosu never runs; and gosu makes no TLS connections. Fixed when the
+# postgres image ships gosu built with Go >= 1.24.13. Accepted: yqyeoh, SCRUM-37.
+CVE-2025-68121 exp:2026-12-31
+
+# CVE-2026-47890 (CRITICAL per NVD; Red Hat rates it 6.5 Medium): spring-webmvc 6.2.19, in ledgerwriter,
+# balancereader, transactionhistory. Stream corruption when an endpoint renders view fragments over
+# Server-Sent Events. Not reachable here: the services return plain JSON from @RestController methods;
+# none uses SseEmitter, text/event-stream, fragment rendering or any server-side view (checked with
+# grep over src/ledger). The only fix is Spring 7 (Spring Boot 4), the same major upgrade as
+# CVE-2026-47884 above. Accepted: yqyeoh, SCRUM-37.
+CVE-2026-47890 exp:2026-12-31

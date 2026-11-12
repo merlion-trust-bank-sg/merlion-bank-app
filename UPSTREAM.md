@@ -41,5 +41,8 @@ Each change is made in its own reviewed PR and listed here.
 | `certifi` 2026.7.22 → 2026.10.23 | `uv.lock` in the 4 Python services | CI scans: critical GHSA-6q48-6c7w-9gw2 (CA bundle included compromised emSign roots) |
 | `brotli` 1.2.0 → 1.2.1 | `src/loadgenerator/uv.lock` | CI scans: critical CVE-2026-111497 (out-of-bounds write) |
 | Netty pinned to 4.1.137.Final (`netty.version`) | the 3 `src/ledger/*/pom.xml` | CI scans: critical CVE-2026-75595 in `netty-handler` (SNI routing bypass); same 4.1 line as Spring Boot 3.5's default |
+| Tomcat pinned to 10.1.59 (`tomcat.version`) | the 3 `src/ledger/*/pom.xml` | CI scans: criticals CVE-2026-55276, -65182, -65637, -65905, -68525 in `tomcat-embed-core`; same 10.1 line as Spring Boot 3.5's default |
 
-Not changed, with a documented exception in `security/.trivyignore`: `spring-webmvc` 6.2.19 (CVE-2026-47884). The only fix is Spring 7 / Spring Boot 4; the vulnerable `XsltView` isn't used by any service.
+Not changed, with documented exceptions in `security/.trivyignore` (each with a reason and an expiry):
+- `spring-webmvc` 6.2.19: CVE-2026-47884 (`XsltView`) and CVE-2026-47890 (view fragments over Server-Sent Events). The only fix is Spring 7 / Spring Boot 4; neither feature is used by any service.
+- `gosu` in the Postgres images: CVE-2025-68121 (Go `crypto/tls`). Our DB init Job replaces the image's entrypoint, so `gosu` never runs.

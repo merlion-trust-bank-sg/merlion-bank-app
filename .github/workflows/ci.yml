@@ -76,8 +76,9 @@ jobs:
         run: ./mvnw -q -B dependency:go-offline
 
       # Lock files and pom.xml only: what each service ships, not the images' OS packages (image-scan)
+      # --offline-scan: read the POMs from ~/.m2 (filled above) instead of fetching any from Maven Central
       - name: Trivy filesystem scan (vulnerabilities in dependencies)
-        run: trivy fs --scanners vuln --format table src/
+        run: trivy fs --scanners vuln --offline-scan --format table src/
 
   tests:
     name: tests (${{ matrix.service }})
