@@ -1,0 +1,69 @@
+name: build-image
+description: >-
+  Build one Bank of Anthos image for linux/amd64 into the runner's Docker, then scan it with Trivy
+  (CRITICAL findings that have a fix fail the step). Shared by ci.yml (scan only) and
+  cd.yml (scan, then push the same image).
+inputs:
+  image:
+    description: Full image reference, e.g. 255945442255.dkr.ecr.us-east-1.amazonaws.com/merlion/frontend:<sha>
+    required: true
+  builder:
+    description: docker (Dockerfile) or jib (Java services)
+    required: true
+  context:
+    description: Source folder, e.g. src/frontend
+    required: true
+  trivy-version:
+    description: Trivy release
+    default: v0.76.2
+runs:
+  using: composite
+  steps:
+    - name: Install Trivy
+      uses: ./.github/actions/setup-trivy
+      with:
+        version: ${{ inputs.trivy-version }}
+
+    - name: Set up Docker Buildx
+      if: inputs.builder == 'docker'
+      uses: docker/setup-buildx-action@v4
+
+    - name: Build (Dockerfile)
+      if: inputs.builder == 'docker'
+      uses: docker/build-push-action@v7
+      with:
+        context: ${{ inputs.context }}
+        platforms: linux/amd64 # the EKS nodes are x86
+        load: true
+        provenance: false
+        tags: ${{ inputs.image }}
+
+    # Upstream has no Dockerfile for the Java services; Jib builds the image from the compiled code
+    - name: Set up JDK 17
+      if: inputs.builder == 'jib'
+      uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: "17"
+        cache: maven
+
+    - name: Build (Jib, into the local Docker)
+      if: inputs.builder == 'jib'
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        CONTEXT: ${{ inputs.context }}
+      run: |
+        ./mvnw -q -B -pl "$CONTEXT" -am -DskipTests compile jib:dockerBuild \
+          -Dimage="$IMAGE" -Djib.from.platforms=linux/amd64
+
+    # The gate: OS packages and language libraries in the final image. Exceptions only through
+    # security/.trivyignore (reason, ticket, expiry).
+    - name: Trivy image scan
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        trivy image --scanners vuln --format table \
+          --severity CRITICAL --ignore-unfixed --exit-code 1 \
+          --ignorefile security/.trivyignore "$IMAGE"

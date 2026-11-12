@@ -1,18 +1,18 @@
-# Build the 9 Bank of Anthos images and publish them to ECR.
+# Publish the 9 Bank of Anthos images to ECR, on merge to main and by hand.
 #
-#   pull request   build only: proves every image builds; no AWS access, nothing pushed
-#   main / manual  build and push as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA;
-#                  the digests go to the run summary for merlion-bank-infra deploy/values-<env>.yaml
+# Each image is built, then scanned with Trivy (the same gate as ci.yml), and only pushed if the scan
+# passes: an image with a CRITICAL finding that has a fix never reaches ECR, even if it got
+# onto main. Pushed as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA; the digests go
+# to the run summary for merlion-bank-infra deploy/values-<env>.yaml.
 #
 # Run it by hand (Actions -> cd -> Run workflow) after the nightly account cleanup empties ECR.
-# The ci-build role trusts only main, so a branch or PR can never publish an image.
+# The ci-build role trusts only main, so a branch or PR can never publish an image. PRs are checked
+# by ci.yml.
 #
-# Not yet: the SCA and image scan gates (ci.yml) and opening the staging promotion PR automatically.
+# Not yet: opening the staging promotion PR in merlion-bank-infra automatically.
 name: cd
 
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -23,12 +23,11 @@ permissions:
 env:
   REGISTRY: 255945442255.dkr.ecr.us-east-1.amazonaws.com
   REPO_PREFIX: merlion
-  PLATFORM: linux/amd64 # the EKS nodes are x86
 
-# One publish per commit at a time; a newer push to main doesn't cancel a build mid-push
+# One publish at a time; a newer push to main waits rather than cancelling a build mid-push
 concurrency:
-  group: cd-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: cd-main
+  cancel-in-progress: false
 
 jobs:
   images:
@@ -36,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # GitHub OIDC token for AWS; only used on main
+      id-token: write # GitHub OIDC token for AWS
     strategy:
       fail-fast: false
       matrix:
@@ -51,61 +50,36 @@ jobs:
           - { image: balancereader, builder: jib, context: src/ledger/balancereader }
           - { image: transactionhistory, builder: jib, context: src/ledger/transactionhistory }
     env:
-      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-      IMAGE: 255945442255.dkr.ecr.us-east-1.amazonaws.com/merlion/${{ matrix.image }}
+      IMAGE: 255945442255.dkr.ecr.us-east-1.amazonaws.com/merlion/${{ matrix.image }}:${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Built into the runner's Docker and scanned; a failed scan stops the job before any AWS access
+      - name: Build and scan
+        uses: ./.github/actions/build-image
+        with:
+          image: ${{ env.IMAGE }}
+          builder: ${{ matrix.builder }}
+          context: ${{ matrix.context }}
+
       # Session name links every push in CloudTrail back to this run
       - name: AWS login (ci-build, push only)
-        if: env.PUBLISH == 'true'
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::255945442255:role/g4-merlion-ci-build
           role-session-name: ci-${{ github.run_id }}-${{ github.run_attempt }}
           aws-region: us-east-1
 
-      - name: ECR login
-        if: env.PUBLISH == 'true'
-        run: aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
-
-      # Dockerfile images
-      - name: Set up Docker Buildx
-        if: matrix.builder == 'docker'
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build${{ env.PUBLISH == 'true' && ' and push' || '' }} (Dockerfile)
-        if: matrix.builder == 'docker'
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          platforms: ${{ env.PLATFORM }}
-          push: ${{ env.PUBLISH == 'true' }}
-          provenance: false
-          tags: ${{ env.IMAGE }}:${{ github.sha }}
-
-      # Java services: Jib builds the image from the compiled code (upstream has no Dockerfile for them)
-      - name: Set up JDK 17
-        if: matrix.builder == 'jib'
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
-
-      - name: Build${{ env.PUBLISH == 'true' && ' and push' || '' }} (Jib)
-        if: matrix.builder == 'jib'
+      # Pushes exactly the image that was scanned
+      - name: Push to ECR
         run: |
-          # buildTar on PRs: builds the image into a file, so nothing needs a registry or credentials
-          goal="$([ "$PUBLISH" = true ] && echo jib:build || echo jib:buildTar)"
-          ./mvnw -q -B -pl "${{ matrix.context }}" -am -DskipTests compile "$goal" \
-            -Dimage="$IMAGE:${GITHUB_SHA}" -Djib.from.platforms="$PLATFORM"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+          docker push "$IMAGE"
 
   summary:
     name: digests
     needs: images
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read

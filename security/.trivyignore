@@ -1,4 +1,6 @@
-# Trivy exceptions. JUSTIFIED EXCEPTIONS ONLY: fixing the finding always comes first.
+# Trivy exceptions. JUSTIFIED EXCEPTIONS ONLY: fixing the finding always comes first. An exception is
+# allowed when there is no fix, or the fix needs a major upgrade of upstream code, and the finding isn't
+# reachable in our deployment. Accepted by a reviewer other than the proposer (the PR approval).
 # Format: one ID per line, with an expiry:   <ID> exp:YYYY-MM-DD
 # Every entry needs a comment above it: why, who accepted it, Jira ticket.
 # After the expiry date the entry stops working and the gate fails again.
@@ -6,3 +8,27 @@
 # Example for a CVE with no fix yet:
 # Not reachable because <reason>. Accepted: <name>, SCRUM-<n>.
 # CVE-YYYY-NNNNN exp:2026-12-31
+
+# CVE-2026-47884 (CRITICAL): spring-webmvc 6.2.19, in ledgerwriter, balancereader, transactionhistory.
+# SSRF/RCE in Spring MVC's XsltView, only when an app renders views through XsltView with a catch-all
+# mapping and no explicit view name. Not reachable here: all three services are @RestController JSON
+# APIs with explicit mappings; none uses XsltView, a ViewResolver or any server-side view (checked
+# with grep over src/ledger). The only fix is Spring 7 (Spring Boot 4), a major upgrade of unmodified
+# upstream code. Revisit when upstream Bank of Anthos moves to Spring Boot 4, or at the expiry.
+# Proposed: yqyeoh. Accepted: paulyapsl (DevSecOps), SCRUM-37.
+CVE-2026-47884 exp:2026-12-31
+
+# CVE-2025-68121 (CRITICAL): Go stdlib crypto/tls certificate validation, in /usr/local/bin/gosu inside
+# the accounts-db and ledger-db images (postgres:16.15-alpine's gosu 1.19 is built with Go 1.24.6).
+# Not reachable here: these images only run our DB init Job, whose command (bash -c, then psql) replaces
+# the image's entrypoint, so gosu never runs; and gosu makes no TLS connections. Fixed when the
+# postgres image ships gosu built with Go >= 1.24.13. Proposed: yqyeoh. Accepted: paulyapsl (DevSecOps), SCRUM-37.
+CVE-2025-68121 exp:2026-12-31
+
+# CVE-2026-47890 (CRITICAL per NVD; Red Hat rates it 6.5 Medium): spring-webmvc 6.2.19, in ledgerwriter,
+# balancereader, transactionhistory. Stream corruption when an endpoint renders view fragments over
+# Server-Sent Events. Not reachable here: the services return plain JSON from @RestController methods;
+# none uses SseEmitter, text/event-stream, fragment rendering or any server-side view (checked with
+# grep over src/ledger). The only fix is Spring 7 (Spring Boot 4), the same major upgrade as
+# CVE-2026-47884 above. Proposed: yqyeoh. Accepted: paulyapsl (DevSecOps), SCRUM-37.
+CVE-2026-47890 exp:2026-12-31

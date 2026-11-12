@@ -1,0 +1,145 @@
+# Security and quality gates on every pull request. All jobs are required: a PR can't merge until
+# every one passes. No AWS access: nothing here can publish an image or touch an environment.
+#
+#   secrets      gitleaks over the PR's commits
+#   sca          Trivy over the dependency lock files (uv.lock, pom.xml)
+#   tests        upstream's unit tests (pytest, Maven)
+#   image-scan   builds each image and scans it with Trivy (.github/actions/build-image, also used by
+#                cd.yml, so the image published is built and scanned the same way)
+#
+# Gates fail on CRITICAL findings that have a fix (--ignore-unfixed); HIGH findings are reported by
+# ECR's scan on push and tracked, but don't block. Exceptions go in
+# security/.trivyignore with a reason, a ticket and an expiry; see README "When a security gate fails".
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRIVY_VERSION: v0.76.2
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # gitleaks scans the PR's commits, not just the final files
+
+      - name: Install gitleaks
+        uses: ./.github/actions/setup-gitleaks
+
+      - name: Gitleaks
+        run: |
+          range="origin/${{ github.base_ref || 'main' }}..HEAD"
+          gitleaks git --redact --verbose --log-opts="$range" .
+
+  sca:
+    name: dependencies (SCA)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Trivy
+        uses: ./.github/actions/setup-trivy
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+
+      # Trivy needs each pom.xml's full dependency tree. Resolving it with Maven first fills ~/.m2
+      # (cached between runs), so Trivy reads it locally instead of fetching every parent POM and BOM
+      # from Maven Central itself, which rate-limits shared CI IPs (HTTP 429).
+      - name: Set up JDK 17 (Maven cache)
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Resolve Java dependencies
+        run: ./mvnw -q -B dependency:go-offline
+
+      # Lock files and pom.xml only: what each service ships, not the images' OS packages (image-scan)
+      # --offline-scan: read the POMs from ~/.m2 (filled above) instead of fetching any from Maven Central
+      # The gate: fails on CRITICAL findings that have a fix, except entries in security/.trivyignore
+      - name: Trivy filesystem scan (vulnerabilities in dependencies)
+        run: |
+          trivy fs --scanners vuln --offline-scan --format table \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            --ignorefile security/.trivyignore src/
+
+  tests:
+    name: tests (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { service: userservice, kind: python, path: src/accounts/userservice }
+          - { service: contacts, kind: python, path: src/accounts/contacts }
+          - { service: ledgerwriter, kind: java, path: src/ledger/ledgerwriter }
+          - { service: balancereader, kind: java, path: src/ledger/balancereader }
+          - { service: transactionhistory, kind: java, path: src/ledger/transactionhistory }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        if: matrix.kind == 'python'
+        uses: astral-sh/setup-uv@v7
+
+      - name: pytest
+        if: matrix.kind == 'python'
+        working-directory: ${{ matrix.path }}
+        run: uv run --frozen --group dev pytest -q tests
+
+      - name: Set up JDK 17
+        if: matrix.kind == 'java'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Maven test
+        if: matrix.kind == 'java'
+        run: ./mvnw -q -B -pl "${{ matrix.path }}" -am test
+
+  image-scan:
+    name: image scan (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: frontend, builder: docker, context: src/frontend }
+          - { image: userservice, builder: docker, context: src/accounts/userservice }
+          - { image: contacts, builder: docker, context: src/accounts/contacts }
+          - { image: loadgenerator, builder: docker, context: src/loadgenerator }
+          - { image: accounts-db, builder: docker, context: src/accounts/accounts-db }
+          - { image: ledger-db, builder: docker, context: src/ledger/ledger-db }
+          - { image: ledgerwriter, builder: jib, context: src/ledger/ledgerwriter }
+          - { image: balancereader, builder: jib, context: src/ledger/balancereader }
+          - { image: transactionhistory, builder: jib, context: src/ledger/transactionhistory }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build and scan
+        uses: ./.github/actions/build-image
+        with:
+          image: ci/${{ matrix.image }}:${{ github.sha }}
+          builder: ${{ matrix.builder }}
+          context: ${{ matrix.context }}
+          trivy-version: ${{ env.TRIVY_VERSION }}
