@@ -2,16 +2,18 @@
 #
 # Each image is built, then scanned with Trivy (the same gate as ci.yml), and only pushed if the scan
 # passes: an image with a CRITICAL finding that has a fix never reaches ECR, even if it got
-# onto main. Pushed as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA; the digests go
+# onto main. Each pushed image gets a signed SLSA build provenance attestation (actions/attest,
+# keyless via this run's OIDC identity), stored in GitHub's attestation store by digest: proof that
+# this workflow on main built it, which nobody else can produce. Pushed as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA; the digests go
 # to the run summary for merlion-bank-infra deploy/values-<env>.yaml.
 #
 # Run it by hand (Actions -> cd -> Run workflow) after the nightly account cleanup empties ECR.
 # The ci-build role trusts only main, so a branch or PR can never publish an image. PRs are checked
 # by ci.yml.
 #
-# Then promotes the new images to staging: a PR in merlion-bank-infra that changes only the digests in
-# deploy/values-staging.yaml, opened and merged by the promotion GitHub App once the infra repo's
-# required checks pass (no human approval for staging; prod is promoted separately, with one).
+# Then opens the staging promotion: a PR in merlion-bank-infra, opened by the promotion GitHub App, that
+# changes only the digests in deploy/values-staging.yaml. A teammate approves and merges it, like any
+# other change; Argo CD then rolls staging forward. Prod is promoted the same way, separately.
 name: cd
 
 on:
@@ -37,7 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # GitHub OIDC token for AWS
+      id-token: write # GitHub OIDC token for AWS, and for signing the attestation
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -75,9 +79,21 @@ jobs:
 
       # Pushes exactly the image that was scanned
       - name: Push to ECR
+        id: push
         run: |
           aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
           docker push "$IMAGE"
+          digest="$(aws ecr describe-images --repository-name "$REPO_PREFIX/${{ matrix.image }}" \
+            --image-ids imageTag="$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Signed SLSA provenance for the pushed digest, in GitHub's attestation store only: ECR's tags
+      # are immutable, and the promotion check reads attestations from GitHub without AWS access
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.REPO_PREFIX }}/${{ matrix.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
 
   summary:
     name: digests
@@ -116,9 +132,10 @@ jobs:
     outputs:
       digests: ${{ steps.digests.outputs.json }}
 
-  # Open (or update) the staging promotion PR in merlion-bank-infra, then merge it once its required
-  # checks pass. Acts as the promotion GitHub App: installed on merlion-bank-infra only, with contents
-  # and pull requests access; it may merge without an approval but can't skip the required checks.
+  # Open (or update) the staging promotion PR in merlion-bank-infra. As the promotion GitHub App
+  # (installed on merlion-bank-infra only, contents and pull requests access), so the PR's checks run;
+  # a PR opened with GITHUB_TOKEN wouldn't trigger them. It never merges: a teammate approves and
+  # merges, like any other PR, and the App has no bypass of that rule.
   promote-staging:
     name: promote to staging
     needs: summary
@@ -128,6 +145,9 @@ jobs:
     # Environments -> promotion -> Deployment branches: main). A workflow on any other branch can't
     # read it. Rotation: README "Promotion GitHub App".
     environment: promotion
+    permissions:
+      contents: read
+      attestations: read # which app commit staging runs now (from its images' provenance)
     concurrency:
       group: promote-staging # one promotion at a time; a newer one waits, then supersedes
       cancel-in-progress: false
@@ -136,8 +156,11 @@ jobs:
       BRANCH: promote/staging
       VALUES: deploy/values-staging.yaml
     steps:
-      - name: Checkout (for the digest script)
+      # Full history: the PR lists every app commit since the last promotion
+      - name: Checkout (digest script, app history)
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # Valid one hour, merlion-bank-infra only
       - name: Promotion App token
@@ -156,85 +179,13 @@ jobs:
           token: ${{ steps.app.outputs.token }}
           path: infra
 
-      - name: Update the staging digests
-        id: update
+      # Set the digests, push promote/staging, open or update the PR; see the script for the details
+      - name: Open the staging promotion PR
+        working-directory: infra
         env:
           DIGESTS: ${{ needs.summary.outputs.digests }}
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          echo "$DIGESTS" > "$RUNNER_TEMP/digests.json"
-          python3 .github/scripts/update-digests.py "infra/$VALUES" "$RUNNER_TEMP/digests.json"
-          cd infra
-          if git diff --quiet; then
-            echo "Staging already runs these images; nothing to promote." >> "$GITHUB_STEP_SUMMARY"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            # An earlier promotion that never merged would now hold older digests
-            pr="$(gh pr list --repo "$INFRA" --head "$BRANCH" --state open --json number --jq '.[0].number')"
-            [ -z "$pr" ] || gh pr close "$pr" --repo "$INFRA" --delete-branch \
-              --comment "Superseded: main already has the digests from merlion-bank-app ${GITHUB_SHA::7}."
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # One open promotion PR at most: this force-pushes the branch from main, so the PR always holds
-      # exactly the latest digests and nothing else
-      - name: Push the promotion branch and open the PR
-        if: steps.update.outputs.changed == 'true'
-        id: pr
-        working-directory: infra
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_REPO_TOKEN: ${{ github.token }} # this repo's attestations; the App token only covers merlion-bank-infra
           APP_SLUG: ${{ steps.app.outputs.app-slug }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
-        run: |
-          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git commit -qam "Promote merlion-bank-app ${GITHUB_SHA::7} to staging"
-          git push --force origin "$BRANCH"
-          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-          body="Promotes [merlion-bank-app@${GITHUB_SHA::7}]($COMMIT_URL) to staging: changes only the image digests in \`$VALUES\`.
-
-          Built, scanned and pushed in [cd run ${GITHUB_RUN_ID}]($RUN_URL). Opened and merged by the promotion App once the required checks pass."
-          pr="$(gh pr list --repo "$INFRA" --head "$BRANCH" --state open --json number --jq '.[0].number')"
-          if [ -z "$pr" ]; then
-            gh pr create --repo "$INFRA" --base main --head "$BRANCH" \
-              --title "Promote merlion-bank-app ${GITHUB_SHA::7} to staging" --body "$body"
-            pr="$(gh pr list --repo "$INFRA" --head "$BRANCH" --state open --json number --jq '.[0].number')"
-          else
-            gh pr edit "$pr" --repo "$INFRA" \
-              --title "Promote merlion-bank-app ${GITHUB_SHA::7} to staging" --body "$body"
-          fi
-          echo "number=$pr" >> "$GITHUB_OUTPUT"
-          echo "Promotion PR: https://github.com/$INFRA/pull/$pr" >> "$GITHUB_STEP_SUMMARY"
-
-      # The infra repo's required checks (checks, plan staging, staging promotion only)
-      - name: Wait for the required checks
-        if: steps.update.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          PR: ${{ steps.pr.outputs.number }}
-        run: |
-          # The checks take a few seconds to appear after the push; until then gh reports none
-          for _ in $(seq 1 18); do
-            [ -n "$(gh pr checks "$PR" --repo "$INFRA" --required --json name --jq '.[].name' 2>/dev/null)" ] && break
-            sleep 10
-          done
-          gh pr checks "$PR" --repo "$INFRA" --required --watch --fail-fast --interval 20
-
-      # As the App: its bypass covers the approval rule only, so a failed check still blocks this.
-      # --match-head-commit: never merge digests this run didn't push (a newer run may have updated
-      # the branch in the meantime).
-      - name: Merge the promotion PR
-        if: steps.update.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          PR: ${{ steps.pr.outputs.number }}
-          HEAD: ${{ steps.pr.outputs.head }}
-        run: |
-          gh pr merge "$PR" --repo "$INFRA" --merge --match-head-commit "$HEAD" --admin \
-            --subject "Promote merlion-bank-app ${GITHUB_SHA::7} to staging (#$PR)"
-          echo "Merged: Argo CD rolls staging forward on its next sync of main (within ~3 minutes)." >> "$GITHUB_STEP_SUMMARY"
+          APP_REPO_DIR: ${{ github.workspace }}
+        run: ../.github/scripts/open-promotion-pr.sh

@@ -13,11 +13,11 @@ merlion-bank-app                                   merlion-bank-infra
 SCRUM-<n>-short-desc
   └─ PR ─► ci.yml: gitleaks, SCA, build + image scan (no AWS access)
        └─ 1 approval (not the author) ─► merge to main
-            └─ cd.yml: build once ─► scan ─► push to ECR by digest
+            └─ cd.yml: build once ─► scan ─► push to ECR by digest ─► sign provenance
                        (g4-merlion-ci-build, push only)
-                         └─ PR: staging digest ───────► auto-merge ─► Argo CD syncs staging
+                         └─ PR: staging digests ──────► 1 approval ─► Argo CD syncs staging
                                                          └─ smoke tests
-                                                              └─ PR: same digest for prod
+                                                              └─ PR: same digests for prod
                                                                  1 approval ─► Argo CD syncs prod
                                                                  └─ deploy record ─► S3 Object Lock
 ```
@@ -25,9 +25,11 @@ SCRUM-<n>-short-desc
 1. Branch from `main` as `SCRUM-<n>-<desc>`; commit as `SCRUM-<n>: type(scope): summary`.
 2. Open a PR. `ci.yml` must pass, and someone other than the author must approve.
 3. Merge. `cd.yml` builds each image **once**, scans it, and pushes it to ECR tagged with the
-   commit SHA. Tags are immutable, so a pushed image never changes.
-4. The pipeline opens a PR in `merlion-bank-infra` that changes only the staging image digest. It
-   merges automatically, and Argo CD rolls staging forward.
+   commit SHA. Tags are immutable, so a pushed image never changes. Each image then gets a **signed
+   build provenance attestation**, proof that `cd.yml` on `main` built it (see below).
+4. The pipeline opens a PR in `merlion-bank-infra` that changes only the staging image digests, and
+   lists the app changes it adds. A teammate approves and merges it, and Argo CD rolls staging
+   forward. If more app changes merge first, cd updates the same PR rather than opening another.
 5. After staging passes, a PR with the **same digest** for production is opened. It needs an approval
    from someone other than its author; merging it is the production deploy.
 
@@ -63,17 +65,19 @@ block either.
 
 ## Promotion GitHub App
 
-`cd.yml` opens and merges the staging promotion PR in `merlion-bank-infra` as the **promotion GitHub
-App** (owned by the `merlion-trust-bank-sg` org, installed on `merlion-bank-infra` only). Its
-permissions: Contents and Pull requests read/write, Metadata read.
+`cd.yml` opens the staging promotion PR in `merlion-bank-infra` as the **promotion GitHub App**
+(owned by the `merlion-trust-bank-sg` org, installed on `merlion-bank-infra` only). Its permissions:
+Contents and Pull requests read/write, Metadata read. It's needed because a PR opened with the
+workflow's own `GITHUB_TOKEN` wouldn't trigger the infra repo's required checks.
 
 - **App ID:** Actions variable `PROMOTION_APP_ID` (not a secret).
 - **Private key:** secret `PROMOTION_APP_PRIVATE_KEY` in the **`promotion`** Environment, which only
   `main` may deploy to. The key never leaves GitHub; each run exchanges it for a token valid one hour,
   scoped to `merlion-bank-infra`.
-- **What it may do there:** skip the approval rule on PRs to `main` (bypass, PRs only) and write
-  `promote/**` branches. It can't skip the required checks; the **staging promotion only** check
-  fails any promotion PR that changes more than digests in `deploy/values-staging.yaml`.
+- **What it may do there:** push `promote/**` branches and open or edit PRs. It **never merges**, and
+  has no bypass of any rule: its PRs need the same approval and required checks as everyone's. The
+  **staging promotion only** check fails any promotion PR that changes more than digests in
+  `deploy/values-staging.yaml`.
 
 ### Rotating the private key
 
@@ -88,6 +92,25 @@ Every 90 days, when someone with access to it leaves, or at once if it may have 
 
 If it leaked: delete the old key first (promotions stop until step 2), then check merlion-bank-infra's
 PRs, `promote/**` branches and audit log for anything the App did that `cd` didn't.
+
+## Image provenance
+
+After pushing each image, `cd.yml` creates a signed **SLSA build provenance** attestation for its
+digest (`actions/attest`). It's signed keylessly with the run's OIDC identity, so it proves the image
+was built by `merlion-bank-app/.github/workflows/cd.yml` on `refs/heads/main`, from a given commit and
+run; nobody else, account admins included, can produce that signature. Attestations are kept in
+GitHub's attestation store by digest, not in ECR (its tags are immutable).
+
+To check one by hand:
+
+```bash
+gh attestation verify oci://255945442255.dkr.ecr.us-east-1.amazonaws.com/merlion/frontend@sha256:<digest> \
+  --owner merlion-trust-bank-sg \
+  --signer-workflow merlion-trust-bank-sg/merlion-bank-app/.github/workflows/cd.yml \
+  --source-ref refs/heads/main
+```
+
+(This pulls the image, so log in to ECR first.) Images built before signing was added have none.
 
 ## CI log hygiene
 
