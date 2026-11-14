@@ -2,14 +2,18 @@
 #
 # Each image is built, then scanned with Trivy (the same gate as ci.yml), and only pushed if the scan
 # passes: an image with a CRITICAL finding that has a fix never reaches ECR, even if it got
-# onto main. Pushed as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA; the digests go
+# onto main. Each pushed image gets a signed SLSA build provenance attestation (actions/attest,
+# keyless via this run's OIDC identity), stored in GitHub's attestation store by digest: proof that
+# this workflow on main built it, which nobody else can produce. Pushed as g4-merlion-ci-build (GitHub OIDC), tagged with the commit SHA; the digests go
 # to the run summary for merlion-bank-infra deploy/values-<env>.yaml.
 #
 # Run it by hand (Actions -> cd -> Run workflow) after the nightly account cleanup empties ECR.
 # The ci-build role trusts only main, so a branch or PR can never publish an image. PRs are checked
 # by ci.yml.
 #
-# Not yet: opening the staging promotion PR in merlion-bank-infra automatically.
+# Then opens the staging promotion: a PR in merlion-bank-infra, opened by the promotion GitHub App, that
+# changes only the digests in deploy/values-staging.yaml. A teammate approves and merges it, like any
+# other change; Argo CD then rolls staging forward. Prod is promoted the same way, separately.
 name: cd
 
 on:
@@ -35,7 +39,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # GitHub OIDC token for AWS
+      id-token: write # GitHub OIDC token for AWS, and for signing the attestation
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -73,9 +79,21 @@ jobs:
 
       # Pushes exactly the image that was scanned
       - name: Push to ECR
+        id: push
         run: |
           aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
           docker push "$IMAGE"
+          digest="$(aws ecr describe-images --repository-name "$REPO_PREFIX/${{ matrix.image }}" \
+            --image-ids imageTag="$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Signed SLSA provenance for the pushed digest, in GitHub's attestation store only: ECR's tags
+      # are immutable, and the promotion check reads attestations from GitHub without AWS access
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.REPO_PREFIX }}/${{ matrix.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
 
   summary:
     name: digests
@@ -92,9 +110,11 @@ jobs:
           role-session-name: ci-${{ github.run_id }}-${{ github.run_attempt }}
           aws-region: us-east-1
 
-      # Copy these into merlion-bank-infra deploy/values-<env>.yaml (a promotion PR does this later)
-      - name: Image digests to the run summary
+      # The digests of the images this run pushed, for the summary and the promotion PR
+      - name: Image digests
+        id: digests
         run: |
+          json='{}'
           {
             echo "### Images for commit \`${GITHUB_SHA::7}\`"
             echo '```yaml'
@@ -103,6 +123,69 @@ jobs:
               digest="$(aws ecr describe-images --repository-name "$REPO_PREFIX/$name" \
                 --image-ids imageTag="$GITHUB_SHA" --query 'imageDetails[0].imageDigest' --output text)"
               echo "$name: $digest"
+              json="$(jq -c --arg k "$name" --arg v "$digest" '. + {($k): $v}' <<<"$json")"
             done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          echo "json=$json" >> "$GITHUB_OUTPUT"
+
+    outputs:
+      digests: ${{ steps.digests.outputs.json }}
+
+  # Open (or update) the staging promotion PR in merlion-bank-infra. As the promotion GitHub App
+  # (installed on merlion-bank-infra only, contents and pull requests access), so the PR's checks run;
+  # a PR opened with GITHUB_TOKEN wouldn't trigger them. It never merges: a teammate approves and
+  # merges, like any other PR, and the App has no bypass of that rule.
+  promote-staging:
+    name: promote to staging
+    needs: summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The App's private key is a secret of this Environment, which only main may use (Settings ->
+    # Environments -> promotion -> Deployment branches: main). A workflow on any other branch can't
+    # read it. Rotation: README "Promotion GitHub App".
+    environment: promotion
+    permissions:
+      contents: read
+      attestations: read # which app commit staging runs now (from its images' provenance)
+    concurrency:
+      group: promote-staging # one promotion at a time; a newer one waits, then supersedes
+      cancel-in-progress: false
+    env:
+      INFRA: merlion-trust-bank-sg/merlion-bank-infra
+      BRANCH: promote/staging
+      VALUES: deploy/values-staging.yaml
+    steps:
+      # Full history: the PR lists every app commit since the last promotion
+      - name: Checkout (digest script, app history)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Valid one hour, merlion-bank-infra only
+      - name: Promotion App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.PROMOTION_APP_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          owner: merlion-trust-bank-sg
+          repositories: merlion-bank-infra
+
+      - name: Checkout merlion-bank-infra
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.INFRA }}
+          token: ${{ steps.app.outputs.token }}
+          path: infra
+
+      # Set the digests, push promote/staging, open or update the PR; see the script for the details
+      - name: Open the staging promotion PR
+        working-directory: infra
+        env:
+          DIGESTS: ${{ needs.summary.outputs.digests }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_REPO_TOKEN: ${{ github.token }} # this repo's attestations; the App token only covers merlion-bank-infra
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          APP_REPO_DIR: ${{ github.workspace }}
+        run: ../.github/scripts/open-promotion-pr.sh
