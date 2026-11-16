@@ -27,6 +27,10 @@ SCRUM-<n>-short-desc
 3. Merge. `cd.yml` builds each image **once**, scans it, and pushes it to ECR tagged with the
    commit SHA. Tags are immutable, so a pushed image never changes. Each image then gets a **signed
    build provenance attestation**, proof that `cd.yml` on `main` built it (see below).
+   Builds are **reproducible**: a service whose folder didn't change gets the same digest again (Jib
+   does this for the Java images; the Dockerfile builds set every timestamp to the folder's last
+   commit). So a promotion only changes, and only restarts, the services that changed.
+   `ledger-db` is the exception: its `apk add` can pick up a newer package, which is a real change.
 4. The pipeline opens a PR in `merlion-bank-infra` that changes only the staging image digests, and
    lists the app changes it adds. A teammate approves and merges it, and Argo CD rolls staging
    forward. If more app changes merge first, cd updates the same PR rather than opening another.

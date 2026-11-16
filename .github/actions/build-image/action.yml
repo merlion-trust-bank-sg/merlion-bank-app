@@ -28,13 +28,34 @@ runs:
       if: inputs.builder == 'docker'
       uses: docker/setup-buildx-action@v4
 
+    # Reproducible builds: an unchanged service gets the same digest, so a promotion only changes the
+    # services that changed (Jib already does this for the Java images). Every timestamp in the image
+    # (its creation time and every file's mtime) is set to the last commit that touched the service's
+    # folder, instead of the build time. Needs the full Git history (cd.yml checks out with it); in a
+    # shallow clone (ci.yml, scan only) it falls back to the current commit.
+    - name: Timestamp from the service's last commit
+      if: inputs.builder == 'docker'
+      id: epoch
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+      run: |
+        epoch="$(git log -1 --format=%ct -- "$CONTEXT")"
+        if [ "$(git rev-parse --is-shallow-repository)" = true ] || [ -z "$epoch" ]; then
+          epoch="$(git log -1 --format=%ct HEAD)"
+        fi
+        echo "epoch=$epoch" >> "$GITHUB_OUTPUT"
+
     - name: Build (Dockerfile)
       if: inputs.builder == 'docker'
       uses: docker/build-push-action@v7
+      env:
+        SOURCE_DATE_EPOCH: ${{ steps.epoch.outputs.epoch }}
       with:
         context: ${{ inputs.context }}
         platforms: linux/amd64 # the EKS nodes are x86
-        load: true
+        # Into the runner's Docker (as load: true), with every file's mtime set to SOURCE_DATE_EPOCH
+        outputs: type=docker,rewrite-timestamp=true
         provenance: false
         tags: ${{ inputs.image }}
 
