@@ -19,6 +19,10 @@ name: cd
 on:
   push:
     branches: [main]
+    # Docs and ops notes don't change an image: don't rebuild or open a promotion PR for them
+    paths-ignore:
+      - "ops/**"
+      - "**.md"
   workflow_dispatch:
 
 permissions:
