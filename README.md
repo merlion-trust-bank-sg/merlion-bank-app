@@ -120,3 +120,15 @@ gh attestation verify oci://255945442255.dkr.ecr.us-east-1.amazonaws.com/merlion
 
 GitHub stores Actions logs outside `us-east-1`. The pipelines only handle code, synthetic demo data
 and scan results, never customer data or application logs. Secrets are never printed.
+
+## Operations (SRE)
+
+| Path | What |
+|---|---|
+| `ops/slo/slo.md` | SLIs, SLO targets and why, error budget and policy, the alerts tied to them |
+| `ops/queries/logql.md` | Saved Loki queries: per service, errors, failed logins, ledger failures |
+| `ops/queries/promql.md` | Saved Prometheus queries: SLIs, pods, CPU and memory |
+
+Logs and metrics are collected by the monitoring stack in
+[`merlion-bank-infra`](https://github.com/merlion-trust-bank-sg/merlion-bank-infra) (`deploy/platform/`,
+ADR-003) and stay in `us-east-1`. Application logs are kept 365 days.
