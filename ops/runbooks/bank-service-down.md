@@ -9,8 +9,10 @@
 
 Rule for the whole runbook: **look with kubectl, change through Git.** People are read-only in prod;
 every change there is a reviewed PR that Argo CD deploys (HC-2). Argo CD's self-heal undoes changes
-made by hand within minutes, so they don't stick anyway. Staging allows `kubectl` changes for tests
-and the alert demo; record any you make.
+made by hand within minutes, so they don't stick anyway. The one exception in prod is the named
+break-glass holder (yqyeoh, DevSecOps), who may restart or restore in an emergency; every such action
+is in the EKS audit log. Staging allows `kubectl` changes for tests and the alert demo; record any you
+make.
 
 ## 1. Detection
 
@@ -55,10 +57,14 @@ kubectl -n bank logs <pod> --previous       # what it said before it died
 kubectl -n argocd get applications          # is bank-of-anthos Synced and Healthy?
 ```
 
+In prod the SRE has read-only (viewer) access: `get`, `describe` and `logs` work; `port-forward`,
+`scale` and `rollout restart` don't. Use Grafana's address instead of port-forwards.
+
 | What you see | Cause | Mitigation |
 |---|---|---|
 | Deployment shows `0/0` | Its replica count was set to 0 (a values change, or a test in staging) | Prod: find the change in `deploy/` on `main` and revert it by PR. Staging: `kubectl -n bank scale deploy/<name> --replicas=1` (`frontend`: 2); record it. |
 | `ImagePullBackOff` | Digest not in ECR (account cleanup, or a bad promotion) | Roll back (step 6), or re-run `cd` in `merlion-bank-app` to republish |
+| `ImagePullBackOff` with `403`, `no basic auth credentials` or `AccessDenied` in the pod events, often with CoreDNS down and Argo CD showing `Unknown` | The training account's nightly cleanup removed the policies from our IAM roles (node role, add-on roles, pipeline roles). Seen on 18 Nov. | Escalate to the break-glass holder. Staging: `scripts/restore-iam.sh staging` (account admin). Prod: `scripts/restore-iam.sh prod`, by the break-glass holder only; it writes a record to the audit bucket. Then restart Argo CD's controller and check that `kubectl -n kube-system get endpoints kube-dns` lists addresses. |
 | `CrashLoopBackOff`, started after a deploy | Bad release | Roll back (step 6) |
 | `CrashLoopBackOff`, logs show database or secret errors | Database or credentials | Step 4 |
 | `Pending`, event `Insufficient cpu/memory` or `Too many pods` | Nodes full | `kubectl get nodes`; raise the node group's size in `envs/<env>/eks.tf` by PR |
@@ -86,7 +92,7 @@ aws rds describe-events --region us-east-1 --duration 60 --source-type db-instan
 
 - Status `failing-over`, `rebooting` or `modifying`: Multi-AZ failover takes 1 to 2 minutes. Wait and
   watch the error panel fall. If pods don't reconnect within 5 minutes, they need a restart: in prod
-  ask the DevSecOps engineer (cluster admin) to run `kubectl -n bank rollout restart deploy/<service>`,
+  ask the break-glass holder (yqyeoh, DevSecOps) to run `kubectl -n bank rollout restart deploy/<service>`,
   and record it in the incident notes.
 - Status `stopped` or instance missing: escalate to DevSecOps; the fix is a pipeline apply.
 
@@ -129,6 +135,9 @@ kubectl -n argocd get applications
 No Watchdog heartbeat in Telegram for more than 12 hours means Prometheus or Alertmanager is down.
 The bank may be fine; check it with the `curl` in step 2.
 
+If YACE, External Secrets and Loki all fail at the same time, and `BankSliMissing` fires, suspect the
+nightly IAM cleanup first: see the `403` row in step 3.
+
 ## 8. Confirm recovery
 
 - Services down = 0; failed requests back to 0; `curl` returns 200.
@@ -139,7 +148,7 @@ The bank may be fine; check it with the `curl` in step 2.
 
 | When | Who | How |
 |---|---|---|
-| Not mitigated in 15 minutes, or you need a prod change or a pod restart in prod | DevSecOps engineer: yqyeoh (pipeline, EKS, RDS) | Telegram group, then phone |
+| Not mitigated in 15 minutes, or you need a prod change or a pod restart in prod | Break-glass holder: yqyeoh, DevSecOps (pipeline, EKS, RDS) | Telegram group, then phone |
 | Not mitigated in 30 minutes, or the audit trail or data residency may be affected | Solutions Architect: kealeee | Telegram group, then phone |
 | Customer data may be exposed or lost, or outage over 1 hour | Lecturer (stands in for the bank's incident manager and the MAS notification decision) | Email |
 
