@@ -128,6 +128,8 @@ and scan results, never customer data or application logs. Secrets are never pri
 | `ops/slo/slo.md` | SLIs, SLO targets and why, error budget and policy, the alerts tied to them |
 | `ops/queries/logql.md` | Saved Loki queries: per service, errors, failed logins, ledger failures |
 | `ops/queries/promql.md` | Saved Prometheus queries: SLIs, pods, CPU and memory |
+| `ops/runbooks/bank-service-down.md` | Incident runbook: detection, diagnosis, mitigation, escalation |
+| `ops/demo/` | Live alert demo for staging: traffic, trigger, restore |
 
 Logs and metrics are collected by the monitoring stack in
 [`merlion-bank-infra`](https://github.com/merlion-trust-bank-sg/merlion-bank-infra) (`deploy/platform/`,
