@@ -45,9 +45,20 @@ Confirm from outside:
 curl -s -o /dev/null -w '%{http_code}\n' https://merlion.sctp-sandbox.com/ready
 ```
 
-200 = up; 503 = the load balancer has no healthy `frontend`; 500 = `frontend` is failing.
+200 = up; 503 = the load balancer has no healthy `frontend` pod; 502 = `frontend` closed the connection
+or sent a bad response (often a pod restarting); 504 = `frontend` didn't answer in time (a slow backend
+or database, see step 5); 500 = `frontend` itself failed.
 
 ## 3. A service has no pods
+
+Anyone can run `aws eks update-kubeconfig`; what you can then do depends on the access in
+`merlion-bank-infra/envs/prod/eks.tf`:
+
+| Who | Prod access |
+|---|---|
+| SRE (paulyapsl), SA (kealeee) | Viewer: `get`, `describe`, `logs` |
+| Break-glass holder (yqyeoh, DevSecOps) | Cluster admin: restarts and restores in an emergency, recorded |
+| Prod pipeline role | Cluster admin: every normal change |
 
 ```bash
 aws eks update-kubeconfig --name g4-merlion-prod --region us-east-1
