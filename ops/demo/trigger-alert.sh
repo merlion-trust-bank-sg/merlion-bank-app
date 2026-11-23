@@ -3,8 +3,8 @@
 #
 #   1. Terminal A: ops/demo/traffic.sh          (200s, then 503s after the trigger)
 #   2. Terminal B: ops/demo/trigger-alert.sh
-#   3. About 4 min: BankServiceDown (frontend).  About 2 min: BankAvailabilityFastBurn.
-#   4. ops/demo/restore.sh, then RESOLVED messages within about 11 min.
+#   3. About 4 min: BankServiceDown (frontend); about 2 min after that (~6 min from the trigger): BankAvailabilityFastBurn.
+#   4. ops/demo/restore.sh, then RESOLVED messages within about 15 min (measured 13 min on 23 Nov).
 #
 # Why kubectl and not a PR: this is a failure we inject, not a change we keep, and staging is the
 # environment for that. Prod is never changed by hand (HC-2). The Deployment's replica count is owned

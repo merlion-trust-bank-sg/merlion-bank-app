@@ -154,7 +154,7 @@ nightly IAM cleanup first: see the `403` row in step 3.
 ## 8. Confirm recovery
 
 - Services down = 0; failed requests back to 0; `curl` returns 200.
-- Telegram shows **RESOLVED** for the alert (within about 5 minutes).
+- Telegram shows **RESOLVED** for the alert: `BankServiceDown` within a few minutes; the burn-rate alerts can take up to about 15 minutes, because they also look at the last hour.
 - Log in to the bank as `testuser` and open the transaction history.
 
 ## 9. Escalation
