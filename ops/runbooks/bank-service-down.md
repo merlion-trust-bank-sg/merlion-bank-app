@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Alerts | `BankServiceDown`, `BankAvailabilityFastBurn`, `BankAvailabilitySlowBurn`, `BankPodCrashLooping`, `BankLatencyP95High` |
+| Alerts | `BankServiceDown`, `BankAvailabilityFastBurn`, `BankAvailabilitySlowBurn`, `BankPodCrashLooping`, `BankLatencyP95High`, `BankDatabaseUnreachable`, `BankSliMissing` (step 7) |
 | Customer impact | Login, balance, history or payments fail or are slow |
 | SLO at risk | 99.9% availability (43 minutes of outage allowed in 30 days), p95 under 500 ms (`ops/slo/slo.md`) |
 | Owner | SRE on call. Escalation in step 9. |
@@ -17,7 +17,7 @@ make.
 ## 1. Detection
 
 - Telegram message from Alertmanager in the team alert group. It names the alert and, for
-  `BankServiceDown`, the deployment. The message links back to this page.
+  `BankServiceDown`, the deployment. Each alert's `runbook_url` (Grafana → Alerting → Alert rules) links to this page.
 - Or: someone reports the site is down. Check the dashboard first (step 2).
 
 Acknowledge in the group ("I have it") so two people don't work on it separately. Note the time.
@@ -29,7 +29,7 @@ Open Grafana and log in (team: `admin`; assessors and other viewers: `viewer`), 
 
 | Environment | Grafana |
 |---|---|
-| prod | https://grafana.merlion.sctp-sandbox.com |
+| prod | https://grafana.merlion.sctp-sandbox.com (once merlion-bank-infra #65 is applied) |
 | staging | https://grafana.merlion-staging.sctp-sandbox.com |
 
 | Top row shows | Meaning | Go to |
@@ -43,6 +43,7 @@ Confirm from outside:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' https://merlion.sctp-sandbox.com/ready
+curl -s -o /dev/null -w '%{http_code}\n' https://merlion-staging.sctp-sandbox.com/ready   # staging
 ```
 
 200 = up; 503 = the load balancer has no healthy `frontend` pod; 502 = `frontend` closed the connection
@@ -73,13 +74,14 @@ In prod the SRE has read-only (viewer) access: `get`, `describe` and `logs` work
 
 | What you see | Cause | Mitigation |
 |---|---|---|
-| Deployment shows `0/0` | Its replica count was set to 0 (a values change, or a test in staging) | Prod: find the change in `deploy/` on `main` and revert it by PR. Staging: `kubectl -n bank scale deploy/<name> --replicas=1` (`frontend`: 2); record it. |
+| Deployment shows `0/0` | Its replica count was set to 0 (a values change, or a test in staging) | Prod: find the change in `deploy/` on `main` and revert it by PR. Staging: `kubectl -n bank scale deploy/<name> --replicas=2` (every service runs 2 since merlion-bank-infra #62); record it. |
 | `ImagePullBackOff` | Digest not in ECR (account cleanup, or a bad promotion) | Roll back (step 6), or re-run `cd` in `merlion-bank-app` to republish |
 | `ImagePullBackOff` with `403`, `no basic auth credentials` or `AccessDenied` in the pod events, often with CoreDNS down and Argo CD showing `Unknown` | The training account's nightly cleanup removed the policies from our IAM roles (node role, add-on roles, pipeline roles). Seen on 18 Nov. | Escalate to the break-glass holder. Staging: `scripts/restore-iam.sh staging` (account admin). Prod: `scripts/restore-iam.sh prod`, by the break-glass holder only; it writes a record to the audit bucket. Then restart Argo CD's controller and check that `kubectl -n kube-system get endpoints kube-dns` lists addresses. |
 | `CrashLoopBackOff`, started after a deploy | Bad release | Roll back (step 6) |
 | `CrashLoopBackOff`, logs show database or secret errors | Database or credentials | Step 4 |
 | `Pending`, event `Insufficient cpu/memory` or `Too many pods` | Nodes full | `kubectl get nodes`; raise the node group's size in `envs/<env>/eks.tf` by PR |
 | `OOMKilled` | Memory limit too low | Raise `resources.limits.memory` for that service in `deploy/helm/bank-of-anthos/values.yaml` by PR |
+| Deployment shows `1/2` for more than a few minutes | One of the two replicas is gone; the service still works on the other. `BankServiceDown` doesn't fire (it needs 0) | Same diagnosis as above for the missing pod (`describe`, `logs --previous`). Not customer-facing yet, but the service has no spare |
 
 ## 4. Pods run but requests fail
 
