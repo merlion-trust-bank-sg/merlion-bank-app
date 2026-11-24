@@ -150,6 +150,12 @@
             <artifactId>java-jwt</artifactId>
             <version>4.6.1</version>
         </dependency>
+        <!-- DEMO ONLY, DO NOT MERGE: shows the SCA and image-scan gates failing (Text4Shell, CRITICAL) -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-text</artifactId>
+            <version>1.9</version>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
