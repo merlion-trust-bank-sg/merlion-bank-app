@@ -60,12 +60,8 @@ jobs:
       # Trivy needs each pom.xml's full dependency tree. Resolving it with Maven first fills ~/.m2
       # (cached between runs), so Trivy reads it locally instead of fetching every parent POM and BOM
       # from Maven Central itself, which rate-limits shared CI IPs (HTTP 429).
-      - name: Set up JDK 17 (Maven cache)
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
+      - name: Set up Maven
+        uses: ./.github/actions/setup-maven
 
       - name: Resolve Java dependencies
         run: ./mvnw -q -B dependency:go-offline
@@ -104,13 +100,9 @@ jobs:
         working-directory: ${{ matrix.path }}
         run: uv run --frozen --group dev pytest -q tests
 
-      - name: Set up JDK 17
+      - name: Set up Maven
         if: matrix.kind == 'java'
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
+        uses: ./.github/actions/setup-maven
 
       - name: Maven test
         if: matrix.kind == 'java'
