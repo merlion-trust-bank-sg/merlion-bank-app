@@ -60,13 +60,9 @@ runs:
         tags: ${{ inputs.image }}
 
     # Upstream has no Dockerfile for the Java services; Jib builds the image from the compiled code
-    - name: Set up JDK 17
+    - name: Set up Maven
       if: inputs.builder == 'jib'
-      uses: actions/setup-java@v6
-      with:
-        distribution: temurin
-        java-version: "17"
-        cache: maven
+      uses: ./.github/actions/setup-maven
 
     - name: Build (Jib, into the local Docker)
       if: inputs.builder == 'jib'

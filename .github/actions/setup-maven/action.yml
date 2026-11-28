@@ -1,0 +1,37 @@
+name: setup-maven
+description: JDK 17 with the Maven dependency cache, plus a cached Maven wrapper (jar and distribution)
+runs:
+  using: composite
+  steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: "17"
+        cache: maven # ~/.m2/repository only
+
+    # Upstream doesn't commit maven-wrapper.jar, so ./mvnw downloads it and the Maven distribution
+    # from Maven Central in every job. Several jobs doing that at once from shared runner IPs gets
+    # HTTP 429, so keep both in the Actions cache, keyed on the pinned versions.
+    - name: Cache Maven wrapper
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: |
+          .mvn/wrapper/maven-wrapper.jar
+          ~/.m2/wrapper
+        key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+
+    # On a miss, fetch both up front with retries. A failed download leaves an empty jar behind,
+    # which mvnw would then try to run (ClassNotFoundException), so delete it before each retry.
+    - name: Download Maven wrapper
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        for attempt in 1 2 3 4 5; do
+          ./mvnw -q -B -v && exit 0
+          rm -f .mvn/wrapper/maven-wrapper.jar
+          echo "Maven wrapper download failed (attempt $attempt), retrying in $((attempt * 15))s"
+          sleep $((attempt * 15))
+        done
+        exit 1
